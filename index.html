@@ -574,7 +574,53 @@
                     }
                     setIsPlaying(false);
                     
-                    // Load content
+                    // Load audio FIRST before content
+                    if (chapter.audioHref) {
+                        try {
+                            const audioData = await data.zip.file(chapter.audioHref).async('blob');
+                            const audioUrl = URL.createObjectURL(audioData);
+                            
+                            if (audioRef.current) {
+                                // Clean up old audio URL
+                                if (audioBlob) {
+                                    URL.revokeObjectURL(audioBlob);
+                                }
+                                
+                                audioRef.current.src = audioUrl;
+                                audioRef.current.load();
+                                
+                                // Wait for audio to be ready to play
+                                await new Promise((resolve, reject) => {
+                                    const timeout = setTimeout(() => {
+                                        reject(new Error('Audio load timeout'));
+                                    }, 10000);
+                                    
+                                    const onCanPlayThrough = () => {
+                                        clearTimeout(timeout);
+                                        audioRef.current.removeEventListener('canplaythrough', onCanPlayThrough);
+                                        audioRef.current.removeEventListener('error', onError);
+                                        resolve();
+                                    };
+                                    
+                                    const onError = (e) => {
+                                        clearTimeout(timeout);
+                                        audioRef.current.removeEventListener('canplaythrough', onCanPlayThrough);
+                                        audioRef.current.removeEventListener('error', onError);
+                                        reject(e);
+                                    };
+                                    
+                                    audioRef.current.addEventListener('canplaythrough', onCanPlayThrough);
+                                    audioRef.current.addEventListener('error', onError);
+                                });
+                            }
+                            
+                            setAudioBlob(audioUrl);
+                        } catch (e) {
+                            console.error('Error loading audio:', e);
+                        }
+                    }
+                    
+                    // NOW load content
                     const contentHtml = await data.zip.file(chapter.href).async('string');
                     
                     // Parse and extract body content
@@ -610,37 +656,6 @@
                         setCurrentText(body.innerHTML);
                     } else {
                         setCurrentText(contentToUse.innerHTML);
-                    }
-
-                    // Load audio if available
-                    if (chapter.audioHref) {
-                        try {
-                            const audioData = await data.zip.file(chapter.audioHref).async('blob');
-                            const audioUrl = URL.createObjectURL(audioData);
-                            
-                            if (audioRef.current) {
-                                // Clean up old audio URL
-                                if (audioBlob) {
-                                    URL.revokeObjectURL(audioBlob);
-                                }
-                                
-                                audioRef.current.src = audioUrl;
-                                audioRef.current.load();
-                                
-                                // Wait for audio to be ready
-                                await new Promise((resolve) => {
-                                    const onCanPlay = () => {
-                                        audioRef.current.removeEventListener('canplay', onCanPlay);
-                                        resolve();
-                                    };
-                                    audioRef.current.addEventListener('canplay', onCanPlay);
-                                });
-                            }
-                            
-                            setAudioBlob(audioUrl);
-                        } catch (e) {
-                            console.error('Error loading audio:', e);
-                        }
                     }
 
                     setCurrentChapter(index);
