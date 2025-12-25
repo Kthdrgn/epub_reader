@@ -3796,7 +3796,7 @@
                             <strong>Dropbox:</strong> Share link and change ?dl=0 to ?dl=1<br>
                             <strong>Supabase:</strong> Use: https://drive.google.com/uc?export=download&id=FILE_ID<br>
                             <small style="display: block; margin-top: 0.5rem; opacity: 0.8;">
-                                ℹ️ Uses CORS proxy (corsproxy.io) to bypass browser restrictions
+                                ℹ️ Automatically tries multiple CORS proxies for reliable downloads
                             </small>
                         </div>
                         
@@ -3876,20 +3876,11 @@
 
             async downloadFromCloud(url) {
                 this.showNotification('Downloading book from cloud...', 'info');
-                
+
                 try {
-                    // Use CORS proxy for cloud downloads
-                    const corsProxy = 'https://corsproxy.io/?';
-                    const proxiedUrl = corsProxy + encodeURIComponent(url);
-                    
-                    const response = await fetch(proxiedUrl);
-                    
-                    if (!response.ok) {
-                        throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-                    }
-                    
-                    const arrayBuffer = await response.arrayBuffer();
-                    
+                    // Use the robust download method with multiple proxy fallbacks
+                    const arrayBuffer = await this.downloadBookFromCloud(url);
+
                     if (arrayBuffer.byteLength === 0) {
                         throw new Error('Downloaded file is empty');
                     }
@@ -4023,10 +4014,91 @@
             hideBookLoading(bookId) {
                 const bookCard = document.querySelector(`[data-book-id="${bookId}"]`);
                 if (!bookCard) return;
-                
+
                 const overlay = bookCard.querySelector('.book-loading-overlay');
                 if (overlay) {
                     overlay.remove();
+                }
+            }
+
+            async downloadBookFromCloud(cloudUrl) {
+                // List of CORS proxies to try in order
+                const corsProxies = [
+                    'https://api.allorigins.win/raw?url=',
+                    'https://corsproxy.io/?',
+                    'https://api.codetabs.com/v1/proxy?quest='
+                ];
+
+                let lastError = null;
+
+                // Try each CORS proxy
+                for (let i = 0; i < corsProxies.length; i++) {
+                    const corsProxy = corsProxies[i];
+                    const proxyName = corsProxy.includes('allorigins') ? 'AllOrigins' :
+                                     corsProxy.includes('corsproxy') ? 'CorsProxy' : 'CodeTabs';
+
+                    try {
+                        console.log(`Attempting download with ${proxyName}...`);
+                        const proxiedUrl = corsProxy + encodeURIComponent(cloudUrl);
+
+                        const response = await fetch(proxiedUrl, {
+                            method: 'GET',
+                            headers: {
+                                'Accept': 'application/epub+zip, application/octet-stream, */*'
+                            }
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                        }
+
+                        const arrayBuffer = await response.arrayBuffer();
+
+                        // Verify it's actually an EPUB file (should start with PK for ZIP)
+                        const uint8Array = new Uint8Array(arrayBuffer);
+                        if (uint8Array.length < 2 || uint8Array[0] !== 0x50 || uint8Array[1] !== 0x4B) {
+                            throw new Error('Downloaded file is not a valid EPUB');
+                        }
+
+                        console.log(`✓ Successfully downloaded with ${proxyName}`);
+                        return arrayBuffer;
+
+                    } catch (error) {
+                        console.warn(`${proxyName} failed:`, error.message);
+                        lastError = error;
+
+                        // If this isn't the last proxy, continue to next one
+                        if (i < corsProxies.length - 1) {
+                            continue;
+                        }
+                    }
+                }
+
+                // If we get here, all proxies failed
+                // Try direct fetch as last resort
+                try {
+                    console.log('Attempting direct download (no proxy)...');
+                    const response = await fetch(cloudUrl, {
+                        method: 'GET',
+                        mode: 'cors',
+                        headers: {
+                            'Accept': 'application/epub+zip, application/octet-stream, */*'
+                        }
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    const arrayBuffer = await response.arrayBuffer();
+                    console.log('✓ Successfully downloaded directly (no proxy needed)');
+                    return arrayBuffer;
+
+                } catch (error) {
+                    console.error('Direct download also failed:', error.message);
+
+                    // Throw a comprehensive error
+                    throw new Error(`All download methods failed. Last error: ${lastError?.message || error.message}. The book URL may be invalid or the server may be down.`);
                 }
             }
 
@@ -4043,40 +4115,53 @@
                     if (bookData.source === 'cloud' && bookData.cloudUrl) {
                         // Show loading spinner
                         this.showBookLoading(bookId, 'Downloading...');
-                        
+
                         // Automatically download from cloud
                         this.showNotification('Downloading book from cloud...', 'info');
-                        
+
                         try {
-                            // Use CORS proxy
-                            const corsProxy = 'https://corsproxy.io/?';
-                            const proxiedUrl = corsProxy + encodeURIComponent(bookData.cloudUrl);
-                            
-                            const response = await fetch(proxiedUrl);
-                            
-                            if (!response.ok) {
-                                throw new Error(`Download failed: ${response.status}`);
-                            }
-                            
-                            const arrayBuffer = await response.arrayBuffer();
-                            
+                            const arrayBuffer = await this.downloadBookFromCloud(bookData.cloudUrl);
+
                             // Hide loading spinner
                             this.hideBookLoading(bookId);
-                            
+
                             // Cache this book's file data
                             this.libraryManager.cacheBookData(bookId, arrayBuffer);
-                            
+
                             // Now open the book
                             await this.openBookWithData(bookId, arrayBuffer);
-                            
+
                         } catch (error) {
                             // Hide loading spinner
                             this.hideBookLoading(bookId);
-                            
+
                             console.error('Error downloading from cloud:', error);
-                            this.showNotification('Failed to download book from cloud: ' + error.message, 'error');
+                            this.showNotification('Failed to download book from cloud. Please re-upload this book.', 'error');
+
+                            // Show file picker as fallback
+                            const input = document.createElement('input');
+                            input.type = 'file';
+                            input.accept = '.epub';
+                            input.onchange = async (e) => {
+                                const file = e.target.files[0];
+                                if (!file) return;
+
+                                this.showBookLoading(bookId, 'Loading...');
+
+                                try {
+                                    const arrayBuffer = await file.arrayBuffer();
+                                    this.hideBookLoading(bookId);
+                                    this.libraryManager.cacheBookData(bookId, arrayBuffer);
+                                    await this.openBookWithData(bookId, arrayBuffer);
+                                } catch (error) {
+                                    this.hideBookLoading(bookId);
+                                    console.error('Error loading book:', error);
+                                    this.showNotification('Error loading book file', 'error');
+                                }
+                            };
+                            input.click();
                         }
-                        
+
                         return;
                     }
                     
