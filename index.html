@@ -4024,22 +4024,23 @@
             async downloadBookFromCloud(cloudUrl) {
                 // List of CORS proxies to try in order
                 const corsProxies = [
-                    'https://api.allorigins.win/raw?url=',
-                    'https://corsproxy.io/?',
-                    'https://api.codetabs.com/v1/proxy?quest='
+                    { url: 'https://streamwave-cors-proxy.keith-e-dragon.workers.dev/', name: 'Cloudflare', encode: false },
+                    { url: 'https://api.allorigins.win/raw?url=', name: 'AllOrigins', encode: true },
+                    { url: 'https://corsproxy.io/?', name: 'CorsProxy', encode: true },
+                    { url: 'https://api.codetabs.com/v1/proxy?quest=', name: 'CodeTabs', encode: true }
                 ];
 
                 let lastError = null;
 
                 // Try each CORS proxy
                 for (let i = 0; i < corsProxies.length; i++) {
-                    const corsProxy = corsProxies[i];
-                    const proxyName = corsProxy.includes('allorigins') ? 'AllOrigins' :
-                                     corsProxy.includes('corsproxy') ? 'CorsProxy' : 'CodeTabs';
+                    const proxy = corsProxies[i];
 
                     try {
-                        console.log(`Attempting download with ${proxyName}...`);
-                        const proxiedUrl = corsProxy + encodeURIComponent(cloudUrl);
+                        console.log(`Attempting download with ${proxy.name}...`);
+                        const proxiedUrl = proxy.encode ?
+                            proxy.url + encodeURIComponent(cloudUrl) :
+                            proxy.url + cloudUrl;
 
                         const response = await fetch(proxiedUrl, {
                             method: 'GET',
@@ -4060,11 +4061,11 @@
                             throw new Error('Downloaded file is not a valid EPUB');
                         }
 
-                        console.log(`✓ Successfully downloaded with ${proxyName}`);
+                        console.log(`✓ Successfully downloaded with ${proxy.name}`);
                         return arrayBuffer;
 
                     } catch (error) {
-                        console.warn(`${proxyName} failed:`, error.message);
+                        console.warn(`${proxy.name} failed:`, error.message);
                         lastError = error;
 
                         // If this isn't the last proxy, continue to next one
